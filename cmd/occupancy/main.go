@@ -36,13 +36,16 @@ func main() {
 	var fsStorePath string
 	flag.StringVar(&fsStorePath, "store", "", "File system data store")
 
+	var bindAddr string
+	flag.StringVar(&bindAddr, "bind", "192.168.0.1:54321", "Network bind address in case you have multiple nic")
+
+	flag.Parse()
+
 	if fsStorePath == "" {
 		homedir, _  := os.UserHomeDir()
 		fsStorePath = filepath.Join(homedir, "work", "homekit",  "officeOccupancy")
 	}
 
-	var bindAddr string
-	flag.StringVar(&bindAddr, "bind", "192.168.0.1:54321", "Network bind address in case you have multiple nic")
 
 
 	o := accessory.NewOccupancySensor(accessory.Info{
