@@ -1,12 +1,14 @@
 package main
 
 import (
+	"flag"
 	"github.com/gsapkal/hap"
 	"github.com/gsapkal/hap/accessory"
 	"github.com/gsapkal/hap/characteristic"
 	"github.com/gsapkal/hap/log"
-	"strconv"
+	"path/filepath"
 	"strings"
+	"time"
 	"tinygo.org/x/bluetooth"
 
 	"context"
@@ -20,11 +22,28 @@ var adapter = bluetooth.DefaultAdapter
 
 func main() {
 
-	i, err := strconv.ParseInt(getenv("THRESHOLD", "-60"), 10, 32)
-	if err != nil {
-		panic(err)
+	var logLevel string
+	flag.StringVar(&logLevel, "loglevel", "INFO", "Logging level")
+
+	var devices string
+	flag.StringVar(&devices, "devices", "Ganesh's iphone", "BLE device name to monitor")
+
+	var thresholdInt int
+	flag.IntVar(&thresholdInt, "threshold", -60, "BLE RSSI threshold to detect occupancy")
+
+	threshold := int16(thresholdInt)
+
+	var fsStorePath string
+	flag.StringVar(&fsStorePath, "store", "", "File system data store")
+
+	if fsStorePath == "" {
+		homedir, _  := os.UserHomeDir()
+		fsStorePath = filepath.Join(homedir, "work", "homekit",  "officeOccupancy")
 	}
-	threshold := int16(i)
+
+	var bindAddr string
+	flag.StringVar(&bindAddr, "bind", "192.168.0.1:54321", "Network bind address in case you have multiple nic")
+
 
 	o := accessory.NewOccupancySensor(accessory.Info{
 		Name:         "OfficeOccupancySensor",
@@ -35,12 +54,13 @@ func main() {
 
 	})
 
-	s, err := hap.NewServer(hap.NewFsStore(getenv("STORE","./homekit/officeOccupancy")), o.A)
+	s, err := hap.NewServer(hap.NewFsStore(fsStorePath), o.A)
+	s.Addr = bindAddr
 	if err != nil {
 		log.Info.Panic(err)
 	}
 
-	if getenv("LOGLEVEL", "INFO") == "DEBUG" {
+	if logLevel == "DEBUG" {
 		mylogger := syslog.New(os.Stdout, "HAP ", syslog.LstdFlags|syslog.Lshortfile)
 		log.Debug = &log.Logger{Logger: mylogger}
 	}
@@ -57,21 +77,33 @@ func main() {
 	}()
 
 	go func() {
-		must("start occupancy accessary ", s.ListenAndServe(ctx))
+		must("start occupancy accessory ", s.ListenAndServe(ctx))
 	}()
 
 	// Enable BLE interface.
 	must("enable BLE stack", adapter.Enable())
 	// Start scanning.
-	println("scanning...")
-	err = adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
-		//		println("found device:", device.Address.String(), device.RSSI, device.LocalName())
+	log.Info.Println("Detecting occupancy based on device ...", devices)
 
-		if strings.Contains(device.LocalName() , getenv("DEVICES", "My iphone")) {
+	start := time.Now()
+
+	err = adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
+
+		if len(device.LocalName()) > 0 && strings.Contains(devices, device.LocalName()) {
 			log.Debug.Println("found device:", device.Address.String(), device.RSSI, device.LocalName())
 			if device.RSSI > threshold {
+				start = time.Now()
 				o.OccupancySensor.OccupancyDetected.SetValue(characteristic.OccupancyDetectedOccupancyDetected)
 			} else {
+				//Avoid flicker in case signal is not stable
+				if time.Since(start).Seconds() > 3 {
+					o.OccupancySensor.OccupancyDetected.SetValue(characteristic.OccupancyDetectedOccupancyNotDetected)
+				}
+			}
+		} else {
+			duration := time.Since(start)
+			if duration.Seconds() > 60 {
+				log.Debug.Println("Missing :", devices)
 				o.OccupancySensor.OccupancyDetected.SetValue(characteristic.OccupancyDetectedOccupancyNotDetected)
 			}
 
