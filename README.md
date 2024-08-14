@@ -15,3 +15,5 @@ go build ./cmd/occupancy
 ```
 
 The default pin for this accessory is `00102003`
+
+Update 
